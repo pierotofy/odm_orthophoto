@@ -132,7 +132,10 @@ private:
       * \param texture The texture from which to get the color.
       **/
     template <typename T>
-    void renderPixel(int row, int col, double u, double v, const cv::Mat &texture);
+    void renderPixel(double u, double v, const cv::Mat &texture, double *buffer);
+
+    template <typename T>
+    void storePixel(int row, int col, double *buffer, int numChannels);
 
     /*!
       * \brief Calculates the barycentric coordinates of a point in a triangle.
