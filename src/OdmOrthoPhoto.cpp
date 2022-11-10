@@ -840,7 +840,7 @@ void OdmOrthoPhoto::drawTexturedTriangle(const cv::Mat &texture, const TextureMe
                 for (int sx = 0; sx < 3; sx++){
                     for (int sy = 0; sy < 3; sy++){
                         // Get barycentric coordinates for the current point.
-                        getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5, static_cast<double>(rq)+0.5, l1, l2, l3);
+                        getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5*sx, static_cast<double>(rq)+0.5*sy, l1, l2, l3);
 
                         // The z value for the point.
                         z += static_cast<float>(v1[2]*l1+v2[2]*l2+v3[2]*l3);
