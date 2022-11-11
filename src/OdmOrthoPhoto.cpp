@@ -444,8 +444,18 @@ void OdmOrthoPhoto::createOrthoPhoto()
 
         log_ << "Rendering the ortho photo...\n";
 
+        // We render the orthophoto by sampling 9 times using
+        // different coordinate offsets to perform antialiasing via averaging
+        buffer = nullptr;
+
         // The current material texture
         cv::Mat texture;
+
+        for (sx = 1; sx < 2; sx++){ for (sy = 1; sy < 2; sy++){
+        
+        log_ << "Rendering pass " << sx << "|" << sy << "\n";
+        //finalPass = sx == 2 && sy == 2;
+        finalPass = true;
 
         // Iterate over each part of the mesh (one per material).
         for (auto &material : mesh.materials_idx){
@@ -504,6 +514,18 @@ void OdmOrthoPhoto::createOrthoPhoto()
                 }
             }
 
+            if (buffer == nullptr){
+                try{
+                    buffer = new double[static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(texture.channels())];
+                    memset(buffer, 0, sizeof(double) * static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(texture.channels()));
+                    bufSamples = new uint16_t[static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(texture.channels())];
+                    memset(bufSamples, 0, sizeof(uint16_t) * static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(texture.channels()));
+                }catch(const std::bad_alloc &){
+                    std::cerr << "Couldn't allocate enough memory to render the orthophoto (" << width << "x" << height << " cells = " << ((long long)width * (long long)height * 4) << " bytes). Try to increase the --orthophoto-resolution parameter to a larger integer or add more RAM.\n";
+                    exit(1);
+                }
+            }
+
             log_ << "Rendering " << material << " ... ";
             // Iterate over each face...
             for(Face &f : faces){
@@ -520,6 +542,13 @@ void OdmOrthoPhoto::createOrthoPhoto()
             log_ << "done\n";
 
         }
+
+        }} // for sx,sy
+
+        delete[] buffer;
+        buffer = nullptr;
+        delete[] bufSamples;
+        bufSamples = nullptr;
 
         log_ << "... model rendered\n";
 
@@ -747,9 +776,6 @@ void OdmOrthoPhoto::drawTexturedTriangle(const cv::Mat &texture, const TextureMe
     // The current column position, from top to bottom.
     double ctb = topC;
 
-    // Buffer to store pixel data
-    double *buffer = new double[texture.channels()];
-
     // Check for vertical line between middle and top.
     if(DBL_EPSILON < midR-topR)
     {
@@ -773,27 +799,11 @@ void OdmOrthoPhoto::drawTexturedTriangle(const cv::Mat &texture, const TextureMe
             int cqEnd = std::min(static_cast<int>(std::floor(0.5+std::max(ctm, ctb))), width);
 
             for(int cq = cqStart; cq < cqEnd; ++cq){
-                float z = 0.0;
-                memset(buffer, 0, sizeof(double) * texture.channels());
-
-                for (int sx = 0; sx < 3; sx++){
-                    for (int sy = 0; sy < 3; sy++){
-                        // Get barycentric coordinates for the current point.
-                        getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5*sx, static_cast<double>(rq)+0.5*sy, l1, l2, l3);
-                        
-                        // The z value for the point.
-                        z += static_cast<float>(v1[2]*l1+v2[2]*l2+v3[2]*l3);
-
-                        // The uv values of the point.
-                        double u, v;
-                        u = v1t[0]*l1+v2t[0]*l2+v3t[0]*l3;
-                        v = v1t[1]*l1+v2t[1]*l2+v3t[1]*l3;
-                        
-                        renderPixel<T>(u*fCols, (1.0-v)*fRows, texture, buffer);
-                    }
-                }
-
-                z /= 9.0;
+                // Get barycentric coordinates for the current point.
+                getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5*static_cast<double>(sx), static_cast<double>(rq)+0.5*static_cast<double>(sy), l1, l2, l3);
+                
+                // The z value for the point.
+                float z = static_cast<float>(v1[2]*l1+v2[2]*l2+v3[2]*l3);
 
                 // Check depth
                 float depthValue = depth_.at<float>(rq, cq);
@@ -802,7 +812,12 @@ void OdmOrthoPhoto::drawTexturedTriangle(const cv::Mat &texture, const TextureMe
                     continue;
                 }
 
-                storePixel<T>(rq, cq, buffer, texture.channels());
+                // The uv values of the point.
+                double u, v;
+                u = v1t[0]*l1+v2t[0]*l2+v3t[0]*l3;
+                v = v1t[1]*l1+v2t[1]*l2+v3t[1]*l3;
+                
+                renderPixel<T>(rq, cq, u*fCols, (1.0-v)*fRows, texture);
 
                 // Update depth buffer.
                 depth_.at<float>(rq, cq) = z;
@@ -835,35 +850,27 @@ void OdmOrthoPhoto::drawTexturedTriangle(const cv::Mat &texture, const TextureMe
             int cqEnd = std::min(static_cast<int>(std::floor(0.5+std::max(cmb, ctb))), width);
 
             for(int cq = cqStart; cq < cqEnd; ++cq){
-                float z = 0.0;
-                memset(buffer, 0, sizeof(double) * texture.channels());
-                for (int sx = 0; sx < 3; sx++){
-                    for (int sy = 0; sy < 3; sy++){
-                        // Get barycentric coordinates for the current point.
-                        getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5*sx, static_cast<double>(rq)+0.5*sy, l1, l2, l3);
+                // Get barycentric coordinates for the current point.
+                getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5*static_cast<double>(sx), static_cast<double>(rq)+0.5*static_cast<double>(sy), l1, l2, l3);
 
-                        // The z value for the point.
-                        z += static_cast<float>(v1[2]*l1+v2[2]*l2+v3[2]*l3);
-
-                        // The uv values of the point.
-                        double u, v;
-                        u = v1t[0]*l1+v2t[0]*l2+v3t[0]*l3;
-                        v = v1t[1]*l1+v2t[1]*l2+v3t[1]*l3;
-
-                        renderPixel<T>(u*fCols, (1.0-v)*fRows, texture, buffer);
-                    }
-                }
-
-                z /= 9.0;
+                // The z value for the point.
+                float z = static_cast<float>(v1[2]*l1+v2[2]*l2+v3[2]*l3);
 
                 // Check depth
                 float depthValue = depth_.at<float>(rq, cq);
                 if(z < depthValue){
                     // Current is behind another, don't draw.
                     continue;
+                }else if (depthValue > -std::numeric_limits<float>::infinity()){
+                    // Current is on top of another, 
                 }
 
-                storePixel<T>(rq, cq, buffer, texture.channels());
+                // The uv values of the point.
+                double u, v;
+                u = v1t[0]*l1+v2t[0]*l2+v3t[0]*l3;
+                v = v1t[1]*l1+v2t[1]*l2+v3t[1]*l3;
+
+                renderPixel<T>(rq, cq, u*fCols, (1.0-v)*fRows, texture);
 
                 // Update depth buffer.
                 depth_.at<float>(rq, cq) = z;
@@ -873,7 +880,7 @@ void OdmOrthoPhoto::drawTexturedTriangle(const cv::Mat &texture, const TextureMe
 }
 
 template <typename T>
-void OdmOrthoPhoto::renderPixel(double s, double t, const cv::Mat &texture, double* buffer)
+void OdmOrthoPhoto::renderPixel(int row, int col, double s, double t, const cv::Mat &texture)
 {
     // The offset of the texture coordinate from its pixel positions.
     double leftF, topF;
@@ -883,7 +890,6 @@ void OdmOrthoPhoto::renderPixel(double s, double t, const cv::Mat &texture, doub
     double dl, dt;
     // The distance to the top and bottom pixel from the texture coordinate.
     double dr, db;
-
     dl = modf(s, &leftF);
     dr = 1.0 - dl;
     dt = modf(t, &topF);
@@ -893,8 +899,10 @@ void OdmOrthoPhoto::renderPixel(double s, double t, const cv::Mat &texture, doub
     top = static_cast<int>(topF);
     
     // The interpolated color values.
-    int numChannels = texture.channels();
+    size_t idx = static_cast<size_t>(row) * static_cast<size_t>(width) + static_cast<size_t>(col);
+
     T *data = reinterpret_cast<T *>(texture.data); // Faster access
+    int numChannels = texture.channels();
 
     for (int i = 0; i < numChannels; i++){
         double value = 0.0;
@@ -909,24 +917,25 @@ void OdmOrthoPhoto::renderPixel(double s, double t, const cv::Mat &texture, doub
         value += static_cast<double>(bl) * dr * dt;
         value += static_cast<double>(br) * dl * dt;
 
-        buffer[i] += value;
-    }
-}
+        size_t bIdx = static_cast<size_t>(i) * static_cast<size_t>(width) * static_cast<size_t>(height) + idx;
+        buffer[bIdx] += value;
+        bufSamples[bIdx]++;
 
-template <typename T>
-void OdmOrthoPhoto::storePixel(int row, int col, double *buffer, int numChannels){
-    // Copy
-    size_t idx = static_cast<size_t>(row) * static_cast<size_t>(width) + static_cast<size_t>(col);
-
-    for (int i = 0; i < numChannels; i++){
-        static_cast<T *>(bands[currentBandIndex + i])[idx] = static_cast<T>(buffer[i] / 9.0);
+        if (finalPass){
+            static_cast<T *>(bands[currentBandIndex + i])[idx] = static_cast<T>(buffer[bIdx] / static_cast<double>(bufSamples[bIdx]));
+            // static_cast<T *>(bands[currentBandIndex + i])[idx] = static_cast<T>(value);
+        }
     }
 
     // Increment the alpha band if the pixel was visible for this band
-    // the final alpha band will be set to 255 if alpha == num bands
+    // the final alpha band will be set to 255 if alpha == num bands * 9
     // (all bands have information at this pixel)
     static_cast<T *>(alphaBand)[idx] += static_cast<T>(numChannels);
-}   
+
+    if (finalPass){
+        // static_cast<T *>(alphaBand)[idx] /= 9.0; // TODO: need a divider sample? //bufSamples[bIdx];
+    }
+}
 
 void OdmOrthoPhoto::getBarycentricCoordinates(const PointXYZ &v1, const PointXYZ &v2, const PointXYZ &v3, double x, double y, double &l1, double &l2, double &l3) const
 {

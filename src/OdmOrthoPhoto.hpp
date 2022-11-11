@@ -132,10 +132,7 @@ private:
       * \param texture The texture from which to get the color.
       **/
     template <typename T>
-    void renderPixel(double u, double v, const cv::Mat &texture, double *buffer);
-
-    template <typename T>
-    void storePixel(int row, int col, double *buffer, int numChannels);
+    void renderPixel(int row, int col, double u, double v, const cv::Mat &texture);
 
     /*!
       * \brief Calculates the barycentric coordinates of a point in a triangle.
@@ -170,6 +167,11 @@ private:
     std::vector<std::string> bandDescriptions;
     void *alphaBand; // Keep alpha band separate
     int currentBandIndex;
+
+    int sx, sy;
+    double *buffer;
+    uint16_t *bufSamples;
+    bool finalPass;
 
     cv::Mat         depth_;             /**< The depth of the ortho photo as an OpenCV matrix, CV_32F. */
 };
