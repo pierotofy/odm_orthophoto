@@ -252,9 +252,9 @@ void OdmOrthoPhoto::saveTIFF(const std::string &filename, GDALDataType dataType)
         std::cerr << "Cannot initialize GeoTIFF driver. Check your GDAL installation." << std::endl;
         exit(1);
     }
-    char **papszOptions = NULL;
+
     GDALDatasetH hDstDS = GDALCreate( hDriver, filename.c_str(), width, height,
-                                      static_cast<int>(bands.size() + 1), dataType, papszOptions );
+                                      static_cast<int>(bands.size() + 1), dataType, NULL );
     GDALRasterBandH hBand;
 
     // Bands
@@ -305,6 +305,88 @@ void OdmOrthoPhoto::saveTIFF(const std::string &filename, GDALDataType dataType)
     GDALClose( hDstDS );
 }
 
+void OdmOrthoPhoto::merge(const std::vector<std::string> &renders, const std::string &outFile){
+    /*
+    if (renders.size() == 0) return;
+
+    GDALDriverH hDriver = GDALGetDriverByName( "GTiff" );
+    if (!hDriver){
+        std::cerr << "Cannot initialize GeoTIFF driver. Check your GDAL installation." << std::endl;
+        exit(1);
+    }
+
+    GDALDatasetH hDstDs = nullptr;
+    GDALRasterBandH hBand;
+
+    GDALDataType dataType;
+    int width;
+    int height;
+    bool first = true;
+
+    for (const std::string &renderFile: renders){
+        
+        GDALDatasetH hSrcDs = GDALOpen(renderFile.c_str(), GA_ReadOnly);
+        if (hSrcDs == nullptr) throw OdmOrthoPhotoException("Cannot open gdal dataset");
+
+        int numBands = GDALGetBandNumber(hSrcDs);
+        
+        // Initialize destination raster
+        if (hDstDs == nullptr){
+            // First band determines the type
+            GDALRasterBandH hBand = GDALGetRasterBand(hSrcDs, 1);
+            dataType = GDALGetRasterDataType(hBand);
+            width = GDALGetRasterXSize(hSrcDs);
+            height = GDALGetRasterYSize(hSrcDs);
+
+            hDstDs = GDALCreate( hDriver, outputFile_.c_str(), width, height,
+                                      numBands, dataType, NULL );
+
+            // Reset memory buffers
+            if (dataType == GDT_Float32){
+                initBands<float>(numBands - 1);
+                initAlphaBand<float>();
+            }else if (dataType == GDT_UInt16){
+                initBands<uint16_t>(numBands - 1);
+                initAlphaBand<uint16_t>();
+            }else if (dataType == GDT_Byte){
+                initBands<uint8_t>(numBands - 1);
+                initAlphaBand<uint8_t>();
+            }else{
+                throw OdmOrthoPhotoException("Invalid data type");
+            }
+        }
+
+        // Read bands
+        for (int b = 0; b < numBands - 1; b++){
+            GDALRasterBandH hBand = GDALGetRasterBand(hSrcDs, b + 1);
+            if (GDALRasterIO(hBand, GF_Read, 0, 0, width, height, bands[b], width, height, dataType, 0, 0) != CE_None) throw OdmOrthoPhotoException("Cannot read band raster");
+        }
+
+        // Read alpha
+        GDALRasterBandH hBand = GDALGetRasterBand(hSrcDs, numBands);
+        if (GDALRasterIO(hBand, GF_Read, 0, 0, width, height, alphaBand, width, height, dataType, 0, 0) != CE_None) throw OdmOrthoPhotoException("Cannot read alpha raster");
+
+        if (first){
+            first = false;
+            // Keep as is
+            continue;
+        }else{
+            // Average raster cells
+
+            size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+            T *arr = reinterpret_cast<T *>(alphaBand);
+            for (size_t j = 0; j < pixelCount; j++){
+                arr[j] = arr[j] >= channels ? 255.0 : 0.0;
+            }
+        }
+        
+
+
+
+    }*/
+}
+
 template <typename T>
 inline T maxRange(){
     return static_cast<T>(pow(2, sizeof(T) * 8) - 1);
@@ -313,30 +395,46 @@ inline T maxRange(){
 template <typename T>
 void OdmOrthoPhoto::initBands(int count){
     size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
-
-    // Channels
     T initValue = maxRange<T>();
 
-    for (int i = 0; i < count; i++){
-        T *arr = new T[pixelCount];
-        for (size_t j = 0; j < pixelCount; j++){
-            arr[j] = initValue;
+    if (bands.empty()){ // TODO: what if multiple OBJs?
+        // Channels
+
+        for (int i = 0; i < count; i++){
+            T *arr = new T[pixelCount];
+            for (size_t j = 0; j < pixelCount; j++){
+                arr[j] = initValue;
+            }
+            bands.push_back(static_cast<void *>(arr));
         }
-        bands.push_back(static_cast<void *>(arr));
+    }else{
+        // Already initialized, just reset values
+        for (void *b : bands){
+            T *arr = static_cast<T *>(b);
+            for (size_t j = 0; j < pixelCount; j++){
+                arr[j] = initValue;
+            }
+        }
     }
 }
 
 template <typename T>
 void OdmOrthoPhoto::initAlphaBand(){
-     size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
-     // Alpha
-     if (alphaBand == nullptr){
-         T *arr = new T[pixelCount];
-         for (size_t j = 0; j < pixelCount; j++){
-             arr[j] = 0.0;
-         }
-         alphaBand = static_cast<void *>(arr);
-     }
+    size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+    if (alphaBand == nullptr){
+       T *arr = new T[pixelCount];
+       for (size_t j = 0; j < pixelCount; j++){
+           arr[j] = 0.0;
+       }
+       alphaBand = static_cast<void *>(arr);
+    }else{
+        // Already initialized, just reset values
+        T *arr = static_cast<T *>(alphaBand);
+        for (size_t j = 0; j < pixelCount; j++){
+           arr[j] = 0.0;
+        }
+    }
 }
 
 template <typename T>
@@ -358,13 +456,13 @@ void OdmOrthoPhoto::createOrthoPhoto()
 {
     if(inputFiles.size() == 0)
     {
-        throw OdmOrthoPhotoException("Failed to create ortho photo, no texture meshes given.");
+        throw OdmOrthoPhotoException("Failed to create orthophoto, no texture meshes given.");
     }
 
     int textureDepth = -1;
     bool primary = true;
     Bounds bounds;
-
+    
     if (outputDepthIdx >= 0 && inputFiles.size() > static_cast<size_t>(outputDepthIdx)){
         log_ << "Setting bit depth from input model " << inputFiles[outputDepthIdx] << "\n";
         
@@ -382,14 +480,16 @@ void OdmOrthoPhoto::createOrthoPhoto()
         }
     }
 
+    std::vector<TextureMesh*> meshes;
+
     for (auto &inputFile : inputFiles){
         log_ << "Reading mesh file... " << inputFile << "\n";
 
-        TextureMesh mesh;
-        loadObjFile(inputFile, mesh);
+        TextureMesh *mesh = new TextureMesh();
+        loadObjFile(inputFile, *mesh);
         log_ << "Mesh file read.\n\n";
 
-        Bounds b = computeBoundsForModel(mesh);
+        Bounds b = computeBoundsForModel(*mesh);
 
         log_ << "Model bounds x : " << b.xMin << " -> " << b.xMax << '\n';
         log_ << "Model bounds y : " << b.yMin << " -> " << b.yMax << '\n';
@@ -414,8 +514,6 @@ void OdmOrthoPhoto::createOrthoPhoto()
         // The resolution necessary to fit the area with the given resolution.
         height = static_cast<int>(std::ceil(resolution_*yDiff));
         width = static_cast<int>(std::ceil(resolution_*xDiff));
-
-        depth_ = cv::Mat::zeros(height, width, CV_32F) - std::numeric_limits<float>::infinity();
         log_ << "Model resolution, width x height : " << width << "x" << height << '\n';
 
         // Check size of photo.
@@ -423,122 +521,148 @@ void OdmOrthoPhoto::createOrthoPhoto()
         {
             if(0 >= height)
             {
-                log_ << "Warning: ortho photo has zero area, height = " << height << ". Forcing height = 1.\n";
+                log_ << "Warning: orthophoto has zero area, height = " << height << ". Forcing height = 1.\n";
                 height = 1;
             }
             if(0 >= width)
             {
-                log_ << "Warning: ortho photo has zero area, width = " << width << ". Forcing width = 1.\n";
+                log_ << "Warning: orthophoto has zero area, width = " << width << ". Forcing width = 1.\n";
                 width = 1;
             }
-            log_ << "New ortho photo resolution, width x height : " << width << "x" << height << '\n';
+            log_ << "New orthophoto resolution, width x height : " << width << "x" << height << '\n';
         }
 
-        // Creates a transformation which aligns the area for the ortho photo.
+        // Creates a transformation which aligns the area for the orthophoto.
         Eigen::Transform<double, 3, Eigen::Affine> transform = getROITransform(bounds.xMin, -bounds.yMax);
+
         log_ << "Translating and scaling mesh...\n";
 
-        for (size_t i = 0; i < mesh.vertices.size(); i++){
-            mesh.vertices[i] = transform * mesh.vertices[i];
+        for (size_t i = 0; i < mesh->vertices.size(); i++){
+            mesh->vertices[i] = transform * mesh->vertices[i];
         }
 
-        log_ << "Rendering the ortho photo...\n";
-
-        // The current material texture
-        cv::Mat texture;
-
-        // Iterate over each part of the mesh (one per material).
-        for (auto &material : mesh.materials_idx){
-            if (mesh.faces.find(material) == mesh.faces.end() || mesh.materials.find(material) == mesh.materials.end()) continue;
-
-            std::vector<Face> faces = mesh.faces[material];
-            texture = mesh.materials[material];
-
-            if (material == mesh.materials_idx[0]){
-                // The first material determines the bit depth
-                // Unless it's already set by outputDepthIdx
-                if (textureDepth == -1) textureDepth = texture.depth();
-                else if (textureDepth != texture.depth()){
-                    // Try to convert
-                    if (textureDepth == CV_8U){
-                        if (texture.depth() == CV_16U){
-                            // 16U to 8U
-                            texture.convertTo(texture, CV_8U, 255.0f / 65535.0f);
-                        }else{
-                            throw OdmOrthoPhotoException("Unknown conversion from CV_8U");
-                        }
-                    }else if (textureDepth == CV_16U){
-                        if (texture.depth() == CV_8U){
-                            // 8U to 16U
-                            texture.convertTo(texture, CV_16U, 65535.0f / 255.0f);
-                        }else{
-                            throw OdmOrthoPhotoException("Unknown conversion from CV_16U");
-                        }
-                    }else{
-                         throw OdmOrthoPhotoException("Texture depth is not the same for all models and could not be converted");
-                    }
-                }
-
-                log_ << "Texture channels: " << texture.channels() << "\n";
-
-                try{
-                    if (textureDepth == CV_8U){
-                        log_ << "Texture depth: 8bit\n";
-                        initBands<uint8_t>(texture.channels());
-                        if (primary) initAlphaBand<uint8_t>();
-                    }else if (textureDepth == CV_16U){
-                        log_ << "Texture depth: 16bit\n";
-                        initBands<uint16_t>(texture.channels());
-                        if (primary) initAlphaBand<uint16_t>();
-                    }else if (textureDepth == CV_32F){
-                        log_ << "Texture depth: 32bit (float)\n";
-                        initBands<float>(texture.channels());
-                        if (primary) initAlphaBand<float>();
-                    }else{
-                        std::cerr << "Unsupported bit depth value: " << textureDepth;
-                        exit(1);
-                    }
-                }catch(const std::bad_alloc &){
-                    std::cerr << "Couldn't allocate enough memory to render the orthophoto (" << width << "x" << height << " cells = " << ((long long)width * (long long)height * 4) << " bytes). Try to increase the --orthophoto-resolution parameter to a larger integer or add more RAM.\n";
-                    exit(1);
-                }
-            }
-
-            log_ << "Rendering " << material << " ... ";
-            // Iterate over each face...
-            for(Face &f : faces){
-                // ... and draw it into the ortho photo.
-                if (textureDepth == CV_8U){
-                    drawTexturedTriangle<uint8_t>(texture, mesh, f);
-                }else if (textureDepth == CV_16U){
-                    drawTexturedTriangle<uint16_t>(texture, mesh, f);
-                }else if (textureDepth == CV_32F){
-                    drawTexturedTriangle<float>(texture, mesh, f);
-                }
-            }
-
-            log_ << "done\n";
-
-        }
-
-        log_ << "... model rendered\n";
-
-        currentBandIndex += texture.channels();
-        primary = false;
+        meshes.push_back(mesh);
     }
 
-    log_ << '\n';
-    log_ << "Writing ortho photo to " << outputFile_ << "\n";
+    std::vector<std::string> renders;
 
-    if (textureDepth == CV_8U){
-        saveTIFF(outputFile_, GDT_Byte);
-    }else if (textureDepth == CV_16U){
-        saveTIFF(outputFile_, GDT_UInt16);
-    }else if (textureDepth == CV_32F){
-        saveTIFF(outputFile_, GDT_Float32);
-    }else{
-        std::cerr << "Unsupported bit depth value: " << textureDepth;
+    for (sx = 0; sx < 3; sx++){ for (sy = 0; sy < 3; sy++){
+        currentBandIndex = 0;
+        for (TextureMesh* mesh : meshes){
+            primary = true;
+            depth_ = cv::Mat::zeros(height, width, CV_32F) - std::numeric_limits<float>::infinity();
+
+            log_ << "Rendering the orthophoto (pass " << sx << "|" << sy << ")...\n";
+
+            // The current material texture
+            cv::Mat texture;
+
+            // Iterate over each part of the mesh (one per material).
+            for (auto &material : mesh->materials_idx){
+                if (mesh->faces.find(material) == mesh->faces.end() || mesh->materials.find(material) == mesh->materials.end()) continue;
+
+                std::vector<Face> faces = mesh->faces[material];
+                texture = mesh->materials[material];
+
+                if (material == mesh->materials_idx[0]){
+                    // The first material determines the bit depth
+                    // Unless it's already set by outputDepthIdx
+                    if (textureDepth == -1) textureDepth = texture.depth();
+                    else if (textureDepth != texture.depth()){
+                        // Try to convert
+                        if (textureDepth == CV_8U){
+                            if (texture.depth() == CV_16U){
+                                // 16U to 8U
+                                texture.convertTo(texture, CV_8U, 255.0f / 65535.0f);
+                            }else{
+                                throw OdmOrthoPhotoException("Unknown conversion from CV_8U");
+                            }
+                        }else if (textureDepth == CV_16U){
+                            if (texture.depth() == CV_8U){
+                                // 8U to 16U
+                                texture.convertTo(texture, CV_16U, 65535.0f / 255.0f);
+                            }else{
+                                throw OdmOrthoPhotoException("Unknown conversion from CV_16U");
+                            }
+                        }else{
+                            throw OdmOrthoPhotoException("Texture depth is not the same for all models and could not be converted");
+                        }
+                    }
+
+                    log_ << "Texture channels: " << texture.channels() << "\n";
+
+                    try{
+                        if (textureDepth == CV_8U){
+                            log_ << "Texture depth: 8bit\n";
+                            initBands<uint8_t>(texture.channels());
+                            if (primary) initAlphaBand<uint8_t>();
+                        }else if (textureDepth == CV_16U){
+                            log_ << "Texture depth: 16bit\n";
+                            initBands<uint16_t>(texture.channels());
+                            if (primary) initAlphaBand<uint16_t>();
+                        }else if (textureDepth == CV_32F){
+                            log_ << "Texture depth: 32bit (float)\n";
+                            initBands<float>(texture.channels());
+                            if (primary) initAlphaBand<float>();
+                        }else{
+                            std::cerr << "Unsupported bit depth value: " << textureDepth;
+                            exit(1);
+                        }
+                    }catch(const std::bad_alloc &){
+                        std::cerr << "Couldn't allocate enough memory to render the orthophoto (" << width << "x" << height << " cells = " << ((long long)width * (long long)height * 4) << " bytes). Try to increase the --orthophoto-resolution parameter to a larger integer or add more RAM.\n";
+                        exit(1);
+                    }
+                }
+
+                log_ << "Rendering " << material << " ... ";
+                // Iterate over each face...
+                for(Face &f : faces){
+                    // ... and draw it into the orthophoto.
+                    if (textureDepth == CV_8U){
+                        drawTexturedTriangle<uint8_t>(texture, *mesh, f);
+                    }else if (textureDepth == CV_16U){
+                        drawTexturedTriangle<uint16_t>(texture, *mesh, f);
+                    }else if (textureDepth == CV_32F){
+                        drawTexturedTriangle<float>(texture, *mesh, f);
+                    }
+                }
+
+                log_ << "done\n";
+
+            }
+
+            log_ << "... model rendered\n";
+
+            currentBandIndex += texture.channels();
+            primary = false;
+        }
+
+        std::string renderFile = outputFile_ + std::to_string(sx) + "_" + std::to_string(sy) + ".tif";
+        renders.push_back(renderFile);
+        log_ << '\n';
+        log_ << "Writing orthophoto to " << renderFile << "\n";
+
+        if (textureDepth == CV_8U){
+            saveTIFF(renderFile, GDT_Byte);
+        }else if (textureDepth == CV_16U){
+            saveTIFF(renderFile, GDT_UInt16);
+        }else if (textureDepth == CV_32F){
+            saveTIFF(renderFile, GDT_Float32);
+        }else{
+            std::cerr << "Unsupported bit depth value: " << textureDepth;
+            exit(1);
+        }
+    }} // end sx,sy
+
+    if (renders.empty()){
+        std::cerr << "No rendered files. This should not have happened." << std::endl;
         exit(1);
+    }else if (renders.size() == 1){
+        // Just rename
+        fs::rename(renders[0], outputFile_);
+        log_ << renders[0] << " --> " << outputFile_ << "\n"; 
+    }else{
+        merge(renders, outputFile_);
     }
 
     if (!outputCornerFile_.empty())
@@ -588,7 +712,7 @@ Bounds OdmOrthoPhoto::computeBoundsForModel(const TextureMesh &mesh)
 
 Eigen::Transform<double, 3, Eigen::Affine> OdmOrthoPhoto::getROITransform(double xMin, double yMin) const
 {
-    // The transform used to move the chosen area into the ortho photo.
+    // The transform used to move the chosen area into the orthophoto.
     Eigen::Transform<double, 3, Eigen::Affine> transform;
 
     transform(0, 0) = resolution_;     // x Scaling.
@@ -772,7 +896,7 @@ void OdmOrthoPhoto::drawTexturedTriangle(const cv::Mat &texture, const TextureMe
             for(int cq = cqStart; cq < cqEnd; ++cq)
             {
                 // Get barycentric coordinates for the current point.
-                getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5, static_cast<double>(rq)+0.5, l1, l2, l3);
+                getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5*static_cast<double>(sx), static_cast<double>(rq)+0.5*static_cast<double>(sy), l1, l2, l3);
                 
                 // The z value for the point.
                 float z = static_cast<float>(v1[2]*l1+v2[2]*l2+v3[2]*l3);
@@ -825,7 +949,7 @@ void OdmOrthoPhoto::drawTexturedTriangle(const cv::Mat &texture, const TextureMe
             for(int cq = cqStart; cq < cqEnd; ++cq)
             {
                 // Get barycentric coordinates for the current point.
-                getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5, static_cast<double>(rq)+0.5, l1, l2, l3);
+                getBarycentricCoordinates(v1, v2, v3, static_cast<double>(cq)+0.5*static_cast<double>(sx), static_cast<double>(rq)+0.5*static_cast<double>(sy), l1, l2, l3);
 
                 // The z value for the point.
                 float z = static_cast<float>(v1[2]*l1+v2[2]*l2+v3[2]*l3);

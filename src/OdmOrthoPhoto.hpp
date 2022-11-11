@@ -151,6 +151,8 @@ private:
     bool isSliverPolygon(const PointXYZ &v1, const PointXYZ &v2, const PointXYZ &v3) const;
     void loadObjFile(std::string inputFile, TextureMesh &mesh);
 
+    void merge(const std::vector<std::string> &renders, const std::string &outFile);
+
     Logger          log_;               /**< Logging object. */
 
     std::vector<std::string> inputFiles;
@@ -167,6 +169,7 @@ private:
     std::vector<std::string> bandDescriptions;
     void *alphaBand; // Keep alpha band separate
     int currentBandIndex;
+    int sx, sy;
 
     cv::Mat         depth_;             /**< The depth of the ortho photo as an OpenCV matrix, CV_32F. */
 };
