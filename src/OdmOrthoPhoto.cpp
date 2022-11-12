@@ -305,8 +305,8 @@ void OdmOrthoPhoto::saveTIFF(const std::string &filename, GDALDataType dataType)
     GDALClose( hDstDS );
 }
 
-void OdmOrthoPhoto::merge(const std::vector<std::string> &renders, const std::string &outFile){
-    /*
+template <typename T> 
+void OdmOrthoPhoto::mergeRenders(const std::vector<std::string> &renders, const std::string &outFile){
     if (renders.size() == 0) return;
 
     GDALDriverH hDriver = GDALGetDriverByName( "GTiff" );
@@ -315,76 +315,115 @@ void OdmOrthoPhoto::merge(const std::vector<std::string> &renders, const std::st
         exit(1);
     }
 
-    GDALDatasetH hDstDs = nullptr;
+    GDALDatasetH hDst = nullptr;
     GDALRasterBandH hBand;
 
     GDALDataType dataType;
     int width;
     int height;
-    bool first = true;
+    std::vector<GDALDatasetH> sources;
 
     for (const std::string &renderFile: renders){
         
-        GDALDatasetH hSrcDs = GDALOpen(renderFile.c_str(), GA_ReadOnly);
-        if (hSrcDs == nullptr) throw OdmOrthoPhotoException("Cannot open gdal dataset");
+        GDALDatasetH hSrc = GDALOpen(renderFile.c_str(), GA_ReadOnly);
+        if (hSrc == nullptr) throw OdmOrthoPhotoException("Cannot open gdal dataset");
 
-        int numBands = GDALGetBandNumber(hSrcDs);
-        
-        // Initialize destination raster
-        if (hDstDs == nullptr){
-            // First band determines the type
-            GDALRasterBandH hBand = GDALGetRasterBand(hSrcDs, 1);
-            dataType = GDALGetRasterDataType(hBand);
-            width = GDALGetRasterXSize(hSrcDs);
-            height = GDALGetRasterYSize(hSrcDs);
+        sources.push_back(hSrc);
+    }
 
-            hDstDs = GDALCreate( hDriver, outputFile_.c_str(), width, height,
-                                      numBands, dataType, NULL );
+    int numBands = GDALGetRasterCount(sources[0]);
+    log_ << "Number of output bands: " << numBands << "\n";
 
-            // Reset memory buffers
-            if (dataType == GDT_Float32){
-                initBands<float>(numBands - 1);
-                initAlphaBand<float>();
-            }else if (dataType == GDT_UInt16){
-                initBands<uint16_t>(numBands - 1);
-                initAlphaBand<uint16_t>();
-            }else if (dataType == GDT_Byte){
-                initBands<uint8_t>(numBands - 1);
-                initAlphaBand<uint8_t>();
+    // Initialize destination raster
+    hBand = GDALGetRasterBand(sources[0], 1);
+    dataType = GDALGetRasterDataType(hBand);
+    width = GDALGetRasterXSize(sources[0]);
+    height = GDALGetRasterYSize(sources[0]);
+
+    hDst = GDALCreate( hDriver, outputFile_.c_str(), width, height,
+                                numBands, dataType, NULL );
+    
+    // Set band meta
+    for (int i = 0; i < numBands - 1; i++){
+        hBand = GDALGetRasterBand( hDst, i + 1 );
+
+        GDALColorInterp interp = GCI_GrayIndex;
+        if (i < static_cast<int>(colorInterps.size())){
+            interp = colorInterps[i];
+        }
+        GDALSetRasterColorInterpretation(hBand, interp );
+
+        if (i < static_cast<int>(bandDescriptions.size())){
+            GDALSetDescription(hBand, bandDescriptions[i].c_str());
+        }
+    }
+
+    hBand = GDALGetRasterBand( hDst, static_cast<int>(numBands) );
+
+    // Set alpha band meta
+    GDALSetRasterColorInterpretation(hBand, GCI_AlphaBand );
+
+
+    double *acc = new double[width];
+    uint16_t *samples = new uint16_t[width];
+    T *buffer = new T[width];
+
+    for (int row = 0; row < height; row++){
+        for (int b = 0; b < numBands; b++){
+            bool alpha = b == numBands - 1;
+            memset(buffer, 0, sizeof(T) * width);
+            memset(acc, 0, sizeof(double) * width);
+            memset(samples, 0, sizeof(uint16_t) * width);
+
+            for (GDALDatasetH &source : sources){
+                hBand = GDALGetRasterBand(source, b + 1);
+                if (GDALRasterIO(hBand, GF_Read, 0, row, width, 1, buffer, width, 1, dataType, 0, 0) != CE_None) throw OdmOrthoPhotoException("Cannot read band raster");
+                
+                if (alpha){
+                    // We have a value if any raster has a value
+                    for (int i = 0; i < width; i++){
+                        acc[i] = (buffer[i] == 255.0 || acc[i] == 255.0) ? 255.0 : 0.0;
+                    }
+                }else{
+                    for (int i = 0; i < width; i++){
+                        acc[i] += static_cast<double>(buffer[i]);
+                        samples[i]++;
+                    }
+                }
+            }
+
+            if (alpha){
+                // Copy
+                for (int i = 0; i < width; i++){
+                    buffer[i] = static_cast<T>(acc[i]);
+                }
             }else{
-                throw OdmOrthoPhotoException("Invalid data type");
+                // Average
+                for (int i = 0; i < width; i++){
+                   if (samples[i] == 0) buffer[i] = static_cast<T>(0);
+                   else buffer[i] = static_cast<T>(acc[i] / static_cast<double>(samples[i]));
+                }
+            }
+
+            // Write
+            hBand = GDALGetRasterBand(hDst, b + 1);
+            
+            if (GDALRasterIO( hBand, GF_Write, 0, row, width, 1, buffer,
+                  width, 1, dataType, 0, 0 ) != CE_None){
+                std::cerr << "Cannot write TIFF to " << outFile << std::endl;
+                exit(1);
             }
         }
+    }
 
-        // Read bands
-        for (int b = 0; b < numBands - 1; b++){
-            GDALRasterBandH hBand = GDALGetRasterBand(hSrcDs, b + 1);
-            if (GDALRasterIO(hBand, GF_Read, 0, 0, width, height, bands[b], width, height, dataType, 0, 0) != CE_None) throw OdmOrthoPhotoException("Cannot read band raster");
-        }
+    delete[] acc;
+    delete[] samples;
+    delete[] buffer;
 
-        // Read alpha
-        GDALRasterBandH hBand = GDALGetRasterBand(hSrcDs, numBands);
-        if (GDALRasterIO(hBand, GF_Read, 0, 0, width, height, alphaBand, width, height, dataType, 0, 0) != CE_None) throw OdmOrthoPhotoException("Cannot read alpha raster");
-
-        if (first){
-            first = false;
-            // Keep as is
-            continue;
-        }else{
-            // Average raster cells
-
-            size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
-
-            T *arr = reinterpret_cast<T *>(alphaBand);
-            for (size_t j = 0; j < pixelCount; j++){
-                arr[j] = arr[j] >= channels ? 255.0 : 0.0;
-            }
-        }
-        
-
-
-
-    }*/
+    for (GDALDatasetH &source : sources){
+        GDALClose(source);
+    }
+    GDALClose( hDst );
 }
 
 template <typename T>
@@ -552,7 +591,7 @@ void OdmOrthoPhoto::createOrthoPhoto()
             primary = true;
             depth_ = cv::Mat::zeros(height, width, CV_32F) - std::numeric_limits<float>::infinity();
 
-            log_ << "Rendering the orthophoto (pass " << sx << "|" << sy << ")...\n";
+            log_ << "Rendering pass " << sx << "|" << sy << "...\n";
 
             // The current material texture
             cv::Mat texture;
@@ -589,19 +628,19 @@ void OdmOrthoPhoto::createOrthoPhoto()
                         }
                     }
 
-                    log_ << "Texture channels: " << texture.channels() << "\n";
+                    // log_ << "Texture channels: " << texture.channels() << "\n";
 
                     try{
                         if (textureDepth == CV_8U){
-                            log_ << "Texture depth: 8bit\n";
+                            // log_ << "Texture depth: 8bit\n";
                             initBands<uint8_t>(texture.channels());
                             if (primary) initAlphaBand<uint8_t>();
                         }else if (textureDepth == CV_16U){
-                            log_ << "Texture depth: 16bit\n";
+                            // log_ << "Texture depth: 16bit\n";
                             initBands<uint16_t>(texture.channels());
                             if (primary) initAlphaBand<uint16_t>();
                         }else if (textureDepth == CV_32F){
-                            log_ << "Texture depth: 32bit (float)\n";
+                            // log_ << "Texture depth: 32bit (float)\n";
                             initBands<float>(texture.channels());
                             if (primary) initAlphaBand<float>();
                         }else{
@@ -627,11 +666,8 @@ void OdmOrthoPhoto::createOrthoPhoto()
                     }
                 }
 
-                log_ << "done\n";
-
+                log_ << "OK\n";
             }
-
-            log_ << "... model rendered\n";
 
             currentBandIndex += texture.channels();
             primary = false;
@@ -639,8 +675,6 @@ void OdmOrthoPhoto::createOrthoPhoto()
 
         std::string renderFile = outputFile_ + std::to_string(sx) + "_" + std::to_string(sy) + ".tif";
         renders.push_back(renderFile);
-        log_ << '\n';
-        log_ << "Writing orthophoto to " << renderFile << "\n";
 
         if (textureDepth == CV_8U){
             saveTIFF(renderFile, GDT_Byte);
@@ -662,7 +696,16 @@ void OdmOrthoPhoto::createOrthoPhoto()
         fs::rename(renders[0], outputFile_);
         log_ << renders[0] << " --> " << outputFile_ << "\n"; 
     }else{
-        merge(renders, outputFile_);
+        if (textureDepth == CV_8U){
+            mergeRenders<uint8_t>(renders, outputFile_);
+        }else if (textureDepth == CV_16U){
+            mergeRenders<uint16_t>(renders, outputFile_);
+        }else if (textureDepth == CV_32F){
+            mergeRenders<float>(renders, outputFile_);
+        }else{
+            std::cerr << "Unsupported bit depth value: " << textureDepth;
+            exit(1);
+        }
     }
 
     if (!outputCornerFile_.empty())

@@ -151,7 +151,8 @@ private:
     bool isSliverPolygon(const PointXYZ &v1, const PointXYZ &v2, const PointXYZ &v3) const;
     void loadObjFile(std::string inputFile, TextureMesh &mesh);
 
-    void merge(const std::vector<std::string> &renders, const std::string &outFile);
+    template <typename T>
+    void mergeRenders(const std::vector<std::string> &renders, const std::string &outFile);
 
     Logger          log_;               /**< Logging object. */
 
